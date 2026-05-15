@@ -1,0 +1,5 @@
+disnake
+sqlalchemy[asyncio]
+aiosqlite
+python-dotenv
+apscheduler
