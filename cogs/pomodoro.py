@@ -12,7 +12,7 @@ import config
 from database.db import async_session
 from database.models import PomodoroSession
 from utils.embeds import create_pomodoro_embed, create_status_embed
-from utils.views import PomodoroView
+from utils.views import PomodoroPresetView, PomodoroView
 
 logger = logging.getLogger("prosto_devops_bot")
 
@@ -26,17 +26,49 @@ class PomodoroCog(commands.Cog):
         name="pomodoro",
         description="Запустить помодоро-сессию",
     )
-    async def pomodoro_command(
+    async def pomodoro_command(self, inter: disnake.ApplicationCommandInteraction) -> None:
+        for session in self._active.values():
+            if session.get("view") and session["view"].author_id == inter.author.id:
+                embed = create_status_embed(
+                    "⛔ У вас уже есть активный таймер. Удалите его, чтобы создать новый.", "error"
+                )
+                await inter.response.send_message(embed=embed, ephemeral=True)
+                return
+
+        avatar_url = str(inter.author.display_avatar.url) if inter.author.display_avatar else None
+        embed = disnake.Embed(
+            title="> ⏳ Выберите режим помодоро",
+            description="Нажмите на один из пресетов или настройте таймер вручную.",
+            color=config.EMBED_COLORS["primary"],
+        )
+        if avatar_url:
+            embed.set_thumbnail(url=avatar_url)
+        embed.add_field(name="", value=f"Создал: <@{inter.author.id}>", inline=False)
+        view = PomodoroPresetView(self, inter.author.id)
+        await inter.response.send_message(embed=embed, view=view)
+
+    async def start_session(
         self,
-        inter: disnake.ApplicationCommandInteraction,
-        focus: int = commands.Param(default=config.DEFAULT_FOCUS_MIN, description="Минут фокуса"),
-        chill: int = commands.Param(default=config.DEFAULT_CHILL_MIN, description="Минут отдыха"),
+        inter: disnake.MessageInteraction | disnake.ModalInteraction,
+        focus_min: int,
+        chill_min: int,
+        edit_original: bool = False,
     ) -> None:
+        if focus_min < 1 or chill_min < 1:
+            embed = create_status_embed(
+                "❌ Время фокуса и отдыха должно быть не менее 1 минуты.", "error"
+            )
+            if edit_original:
+                await inter.response.send_message(embed=embed, ephemeral=True)
+            else:
+                await inter.response.send_message(embed=embed, ephemeral=True)
+            return
+
         async with async_session() as session:
             pomodoro = PomodoroSession(
                 user_id=inter.author.id,
-                focus_min=focus,
-                chill_min=chill,
+                focus_min=focus_min,
+                chill_min=chill_min,
                 cycles_completed=0,
                 status="ready",
             )
@@ -44,25 +76,33 @@ class PomodoroCog(commands.Cog):
             await session.commit()
             session_id = pomodoro.id
 
-        embed = create_pomodoro_embed("ready", "ready", None, 0, inter.author.id, focus, chill)
+        avatar_url = str(inter.author.display_avatar.url) if inter.author.display_avatar else None
+
+        embed = create_pomodoro_embed("ready", "ready", None, 0, inter.author.id, focus_min, chill_min, avatar_url=avatar_url)
         view = PomodoroView(self, session_id, inter.author.id)
 
-        await inter.response.send_message(embed=embed, view=view)
-        message = await inter.original_message()
+        if edit_original:
+            await inter.response.edit_message(embed=embed, view=view)
+            message = await inter.original_message()
+        else:
+            await inter.response.send_message(embed=embed, view=view)
+            message = await inter.original_message()
+
         view.message = message
 
         self._active[session_id] = {
             "view": view,
             "message": message,
-            "focus_min": focus,
-            "chill_min": chill,
+            "focus_min": focus_min,
+            "chill_min": chill_min,
             "cycles": 0,
             "phase": "focus",
-            "seconds_left": focus * 60,
+            "seconds_left": focus_min * 60,
             "status": "ready",
             "task": None,
             "started_at": None,
             "end_timestamp": None,
+            "avatar_url": avatar_url,
         }
 
         logger.info(f"Pomodoro session {session_id} created for user {inter.author.id}")
@@ -83,7 +123,7 @@ class PomodoroCog(commands.Cog):
                     .values(status="paused")
                 )
                 await db_session.commit()
-            view.update_toggle_button("paused")
+            view.update_buttons("paused")
             await self._update_embed(session_id, edit_view=True)
             return None
         else:
@@ -115,7 +155,7 @@ class PomodoroCog(commands.Cog):
             task = asyncio.create_task(self._timer_loop(session_id))
             session["task"] = task
             view.set_task(task)
-            view.update_toggle_button("running")
+            view.update_buttons("running")
             await self._update_embed(session_id, edit_view=True)
             return None
 
@@ -146,16 +186,45 @@ class PomodoroCog(commands.Cog):
 
         embed = create_pomodoro_embed(
             "stopped", "stopped", None, session["cycles"], view.author_id,
-            session["focus_min"], session["chill_min"], None, duration_sec
+            session["focus_min"], session["chill_min"], None, duration_sec,
+            avatar_url=session.get("avatar_url"),
         )
         # Поля Фокус/Отдых/Циклов уже добавлены в create_pomodoro_embed
 
+        view.update_buttons("stopped")
         try:
-            await session["message"].edit(embed=embed, view=None)
+            await session["message"].edit(embed=embed, view=view)
         except disnake.NotFound:
             pass
 
+        return None
+
+    async def delete_timer(self, session_id: int, view: PomodoroView) -> str | None:
+        session = self._active.get(session_id)
+        if not session:
+            return "Сессия не найдена."
+
+        if session["status"] in ("running", "paused"):
+            return "❌ Нельзя удалить работающий таймер. Остановите его сначала."
+
+        try:
+            await session["message"].delete()
+        except disnake.NotFound:
+            pass
+        except Exception as e:
+            logger.error(f"Failed to delete message for session {session_id}: {e}")
+            return "Не удалось удалить сообщение."
+
+        async with async_session() as db_session:
+            await db_session.execute(
+                update(PomodoroSession)
+                .where(PomodoroSession.id == session_id)
+                .values(status="deleted")
+            )
+            await db_session.commit()
+
         self._active.pop(session_id, None)
+        logger.info(f"Pomodoro session {session_id} deleted by owner")
         return None
 
     async def _timer_loop(self, session_id: int) -> None:
@@ -192,7 +261,7 @@ class PomodoroCog(commands.Cog):
             # Continue next phase automatically
             if session["status"] == "running":
                 view = session["view"]
-                view.update_toggle_button("running")
+                view.update_buttons("running")
                 await self._update_embed(session_id, edit_view=True)
                 # Restart loop for next phase
                 task = asyncio.create_task(self._timer_loop(session_id))
@@ -236,6 +305,7 @@ class PomodoroCog(commands.Cog):
             session["focus_min"],
             session["chill_min"],
             session["seconds_left"],
+            avatar_url=session.get("avatar_url"),
         )
         try:
             if edit_view:

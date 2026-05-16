@@ -102,6 +102,8 @@ async def shutdown() -> None:
         await pomodoro_cog.stop_all_sessions()
 
     await bot.close()
+    # Give disnake background tasks a moment to clean up
+    await asyncio.sleep(0.5)
     await engine.dispose()
     logger.info("Bot disconnected and DB engine disposed")
 
