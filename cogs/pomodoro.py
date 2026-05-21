@@ -44,8 +44,11 @@ class PomodoroCog(commands.Cog):
         if avatar_url:
             embed.set_thumbnail(url=avatar_url)
         embed.add_field(name="", value=f"Создал: <@{inter.author.id}>", inline=False)
+        embed.set_footer(text="⌛ У вас есть 2 минуты для выбора")
         view = PomodoroPresetView(self, inter.author.id)
         await inter.response.send_message(embed=embed, view=view)
+        message = await inter.original_message()
+        view.message = message
 
     async def start_session(
         self,
@@ -154,8 +157,12 @@ class PomodoroCog(commands.Cog):
 
             task = asyncio.create_task(self._timer_loop(session_id))
             session["task"] = task
-            view.set_task(task)
-            view.update_buttons("running")
+            # Recreate view with infinite timeout for running state
+            view.stop()
+            new_view = PomodoroView(self, session_id, view.author_id, view.message, timeout=None)
+            new_view.update_buttons("running")
+            new_view.set_task(task)
+            session["view"] = new_view
             await self._update_embed(session_id, edit_view=True)
             return None
 
@@ -191,9 +198,13 @@ class PomodoroCog(commands.Cog):
         )
         # Поля Фокус/Отдых/Циклов уже добавлены в create_pomodoro_embed
 
-        view.update_buttons("stopped")
+        # Recreate view with 2-minute timeout for stopped state (auto-delete on timeout)
+        view.stop()
+        new_view = PomodoroView(self, session_id, view.author_id, view.message, timeout=120)
+        new_view.update_buttons("stopped")
+        session["view"] = new_view
         try:
-            await session["message"].edit(embed=embed, view=view)
+            await session["message"].edit(embed=embed, view=new_view)
         except disnake.NotFound:
             pass
 
@@ -258,6 +269,8 @@ class PomodoroCog(commands.Cog):
             session["seconds_left"] = session["chill_min"] * 60 if session["phase"] == "chill" else session["focus_min"] * 60
             session["end_timestamp"] = int(time.time()) + session["seconds_left"]
 
+            await self._send_phase_dm(session_id)
+
             # Continue next phase automatically
             if session["status"] == "running":
                 view = session["view"]
@@ -271,6 +284,36 @@ class PomodoroCog(commands.Cog):
             return
         except Exception as e:
             logger.error(f"Timer loop error for session {session_id}: {e}")
+
+    async def _send_phase_dm(self, session_id: int) -> None:
+        session = self._active.get(session_id)
+        if not session:
+            return
+        author_id = session["view"].author_id
+        user = self.bot.get_user(author_id)
+        if not user:
+            try:
+                user = await self.bot.fetch_user(author_id)
+            except Exception:
+                logger.warning(f"Could not fetch user {author_id} for DM")
+                return
+
+        phase = session["phase"]
+
+        if phase == "chill":
+            title = "🍅 Фокус завершён!"
+            desc = f"Начался отдых в {session['chill_min']} мин"
+        else:
+            title = "☕ Отдых завершён!"
+            desc = f"Начался фокус в {session['focus_min']} мин"
+
+        embed = disnake.Embed(title=title, description=desc, color=config.EMBED_COLORS["primary"])
+        try:
+            await user.send(embed=embed)
+        except disnake.Forbidden:
+            logger.warning(f"Cannot send DM to user {author_id} (DMs disabled or blocked)")
+        except Exception as e:
+            logger.error(f"Failed to send phase DM to user {author_id}: {e}")
 
     async def stop_all_sessions(self) -> None:
         for session_id, session in list(self._active.items()):

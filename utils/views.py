@@ -19,10 +19,11 @@ class PomodoroPresetView(disnake.ui.View):
         ("52/17", 52, 17),
     ]
 
-    def __init__(self, cog: Any, author_id: int) -> None:
-        super().__init__(timeout=300)
+    def __init__(self, cog: Any, author_id: int, message: disnake.Message | None = None) -> None:
+        super().__init__(timeout=120)
         self.cog = cog
         self.author_id = author_id
+        self.message = message
 
         # Add preset buttons dynamically
         for label, focus_min, chill_min in self.PRESETS:
@@ -57,6 +58,7 @@ class PomodoroPresetView(disnake.ui.View):
                 )
                 await inter.response.send_message(embed=embed, ephemeral=True)
                 return
+            self.stop()
             await self.cog.start_session(inter, focus_min, chill_min, edit_original=True)
         return callback
 
@@ -67,6 +69,7 @@ class PomodoroPresetView(disnake.ui.View):
             )
             await inter.response.send_message(embed=embed, ephemeral=True)
             return
+        self.stop()
         modal = PomodoroCustomModal(self.cog, self.author_id)
         await inter.response.send_modal(modal)
 
@@ -77,10 +80,19 @@ class PomodoroPresetView(disnake.ui.View):
             )
             await inter.response.send_message(embed=embed, ephemeral=True)
             return
+        self.stop()
         try:
             await inter.message.delete()
         except disnake.NotFound:
             pass
+
+    async def on_timeout(self) -> None:
+        logger.info(f"PomodoroPresetView timed out for user {self.author_id}, deleting message")
+        if self.message:
+            try:
+                await self.message.delete()
+            except disnake.NotFound:
+                pass
 
     async def on_error(self, error: Exception, item: disnake.ui.Item, inter: disnake.MessageInteraction) -> None:
         if isinstance(error, disnake.NotFound):
@@ -158,8 +170,9 @@ class PomodoroView(disnake.ui.View):
         session_id: int,
         author_id: int,
         message: disnake.Message | None = None,
+        timeout: float | None = 120,
     ) -> None:
-        super().__init__(timeout=None)
+        super().__init__(timeout=timeout)
         self.cog = cog
         self.session_id = session_id
         self.author_id = author_id
@@ -242,6 +255,22 @@ class PomodoroView(disnake.ui.View):
 
     def set_task(self, task: asyncio.Task | None) -> None:
         self._task = task
+
+    async def on_timeout(self) -> None:
+        session = self.cog._active.get(self.session_id)
+        if not session:
+            return
+        # Only act if this view is still the current one
+        if session.get("view") is not self:
+            return
+        # Delete message for ready and stopped states (not running/paused)
+        if session.get("status") in ("ready", "stopped"):
+            try:
+                await session["message"].delete()
+            except disnake.NotFound:
+                pass
+            self.cog._active.pop(self.session_id, None)
+            logger.info(f"Pomodoro session {self.session_id} auto-deleted after timeout (status={session['status']})")
 
     async def on_error(self, error: Exception, item: disnake.ui.Item, inter: disnake.MessageInteraction) -> None:
         if isinstance(error, disnake.NotFound):

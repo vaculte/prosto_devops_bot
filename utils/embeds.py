@@ -60,9 +60,10 @@ def create_pomodoro_embed(
         if focus_min is not None and chill_min is not None:
             embed.add_field(name="Фокус", value=f"```{focus_min} мин```", inline=True)
             embed.add_field(name="Отдых", value=f"```{chill_min} мин```", inline=True)
+        embed.set_footer(text="⌛ Сообщение будет удалено через 2 минуты")
 
     elif phase == "focus":
-        embed.add_field(name="Окончание отдыха", value=f"\n <t:{end_timestamp}:R>", inline=False)
+        embed.add_field(name="Окончания фокуса", value=f"\n <t:{end_timestamp}:R>", inline=False)
         embed.add_field(name="", value=f"**Циклов:** `{total_cycles}`", inline=True)
 
     elif phase == "chill":
@@ -73,6 +74,7 @@ def create_pomodoro_embed(
         embed.add_field(name="Фокус", value=f"```{focus_min} мин```", inline=True)
         embed.add_field(name="Отдых", value=f"```{chill_min} мин```", inline=True)
         embed.add_field(name="Циклов", value=f"```{total_cycles}```", inline=True)
+        embed.set_footer(text="⌛ У вас есть 2 минуты для старта")
 
     if avatar_url:
         embed.set_thumbnail(url=avatar_url)
