@@ -111,10 +111,17 @@ async def shutdown() -> None:
 def setup_signal_handlers() -> None:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: loop.create_task(shutdown()))
+        try:
+            loop.add_signal_handler(sig, lambda: loop.create_task(shutdown()))
+        except NotImplementedError:
+            logger.debug("Signal handlers are not supported by this event loop")
+            break
 
 
 async def main() -> None:
+    if not config.BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN is not configured. Fill .env before starting the bot.")
+
     await init_db()
     await load_cogs()
     setup_signal_handlers()

@@ -1,0 +1,56 @@
+# Prosto DevOps Bot
+
+Discord-бот для DevOps-сервера: pomodoro-сессии, ивенты, статистика активности, онбординг и админское управление ролями.
+
+## Быстрый запуск
+
+1. Установите зависимости:
+
+```bash
+pip install -r requirements.txt
+```
+
+2. Создайте `.env` по примеру `.env.example`.
+
+3. Запустите бота:
+
+```bash
+python bot.py
+```
+
+При первом запуске бот создаст SQLite-базу `prosto_devops.db`.
+
+## Docker
+
+```bash
+docker compose up -d --build
+```
+
+В Docker база хранится в volume `bot_data`. Логи также идут в stdout контейнера.
+
+## Важные настройки Discord
+
+Боту нужны intents `Server Members`, `Presence Intent` и `Message Content Intent` в Discord Developer Portal.
+
+Роль бота должна стоять выше ролей, которые он выдает. Для Verified укажите `VERIFIED_ROLE_ID` или оставьте имя роли `Verified`.
+
+## Основные команды
+
+- `/pomodoro` - личный pomodoro-таймер.
+- `/event create` - создать ивент, доступно администраторам.
+- `/event list` - ближайшие ивенты.
+- `/event cancel` - отменить ивент, доступно администраторам.
+- `/stats init` - создать дашборд статистики, доступно администраторам.
+- `/stats refresh` - обновить дашборд, доступно администраторам.
+- `/stats weekly` - показать недельную сводку.
+- `/stats me` - личная статистика.
+- `/onboarding panel` - опубликовать кнопку прочтения правил.
+- `/roles give` / `/roles remove` - админское управление ролями, кроме Verified.
+
+## Логика Verified
+
+Verified не выдается через `/roles give`. Участник должен нажать кнопку на панели правил, после чего бот автоматически выдаст роль Verified.
+
+## Статистика
+
+Если `VOICE_CHANNEL_ID` задан, считается только этот голосовой канал. Если переменная пустая, бот считает все голосовые каналы сервера.

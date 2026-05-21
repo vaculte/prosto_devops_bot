@@ -1,0 +1,8 @@
+.env
+.git
+__pycache__/
+*.pyc
+bot.log
+prosto_devops.db
+venv/
+.venv/

@@ -1,0 +1,13 @@
+services:
+  bot:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:///data/prosto_devops.db
+    volumes:
+      - bot_data:/data
+    restart: unless-stopped
+
+volumes:
+  bot_data:
