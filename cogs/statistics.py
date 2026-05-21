@@ -9,7 +9,7 @@ from sqlalchemy import delete, func, select
 
 import config
 from database.db import async_session
-from database.models import DashboardMessage, Event, EventRSVP, PomodoroSession, VoiceActivity
+from database.models import DashboardMessage, Event, EventRSVP, PomodoroParticipant, VoiceActivity
 from utils.embeds import create_stats_embed, create_status_embed, format_duration
 
 logger = logging.getLogger("prosto_devops_bot")
@@ -115,11 +115,11 @@ class StatisticsCog(commands.Cog):
             voice_sec = int(voice_result.scalar_one() or 0)
 
             focus_result = await session.execute(
-                select(func.coalesce(func.sum(PomodoroSession.cycles_completed * PomodoroSession.focus_min), 0))
-                .where(PomodoroSession.user_id == inter.author.id)
-                .where(PomodoroSession.created_at >= since)
+                select(func.coalesce(func.sum(PomodoroParticipant.focus_minutes), 0))
+                .where(PomodoroParticipant.user_id == inter.author.id)
+                .where(PomodoroParticipant.joined_at >= since)
             )
-            focus_min = int(focus_result.scalar_one() or 0)
+            focus_sec = int(focus_result.scalar_one() or 0)
 
             rsvp_result = await session.execute(
                 select(func.count(EventRSVP.id))
@@ -131,7 +131,7 @@ class StatisticsCog(commands.Cog):
 
         embed = disnake.Embed(title="Ваша статистика за 7 дней", color=config.EMBED_COLORS["primary"])
         embed.add_field(name="Голос", value=f"`{format_duration(voice_sec)}`", inline=True)
-        embed.add_field(name="Фокус", value=f"`{focus_min}м`", inline=True)
+        embed.add_field(name="Фокус", value=f"`{format_duration(focus_sec)}`", inline=True)
         embed.add_field(name="Ивенты", value=f"`{rsvps}` RSVP", inline=True)
         await inter.response.send_message(embed=embed, ephemeral=True)
 
@@ -216,10 +216,10 @@ class StatisticsCog(commands.Cog):
             voice_top = [(int(user_id), int(duration or 0)) for user_id, duration in voice_result.all()]
 
             pomodoro_result = await session.execute(
-                select(PomodoroSession.user_id, func.coalesce(func.sum(PomodoroSession.cycles_completed * PomodoroSession.focus_min), 0))
-                .where(PomodoroSession.created_at >= since)
-                .group_by(PomodoroSession.user_id)
-                .order_by(func.sum(PomodoroSession.cycles_completed * PomodoroSession.focus_min).desc())
+                select(PomodoroParticipant.user_id, func.coalesce(func.sum(PomodoroParticipant.focus_minutes), 0))
+                .where(PomodoroParticipant.joined_at >= since)
+                .group_by(PomodoroParticipant.user_id)
+                .order_by(func.sum(PomodoroParticipant.focus_minutes).desc())
                 .limit(10)
             )
             pomodoro_top = [(int(user_id), int(minutes or 0)) for user_id, minutes in pomodoro_result.all() if int(minutes or 0) > 0]

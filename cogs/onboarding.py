@@ -1,14 +1,17 @@
 import logging
+from datetime import datetime, timezone
 
 import disnake
 from disnake.ext import commands
+from sqlalchemy import select
 
 import config
 from database.db import async_session
-from database.models import RoleAudit
+from database.models import DashboardMessage, RoleAudit
 from utils.embeds import create_onboarding_embed, create_status_embed
 
 logger = logging.getLogger("prosto_devops_bot")
+ONBOARDING_PANEL_KEY = "onboarding_panel"
 
 
 def _is_admin(member: disnake.Member | disnake.User) -> bool:
@@ -34,7 +37,7 @@ class RulesApprovalView(disnake.ui.View):
         custom_id="onboarding:request_verified",
     )
     async def accept_button(self, button: disnake.ui.Button, inter: disnake.MessageInteraction) -> None:
-        await inter.response.defer(ephemeral=True)
+        await inter.response.defer(with_message=True, ephemeral=True)
         result, status = await self.cog.accept_rules(inter)
         await inter.edit_original_message(embed=create_status_embed(result, status))
 
@@ -72,7 +75,12 @@ class OnboardingCog(commands.Cog):
         pass
 
     @onboarding_group.sub_command(name="panel", description="Опубликовать панель принятия правил")
-    async def onboarding_panel(self, inter: disnake.ApplicationCommandInteraction) -> None:
+    async def onboarding_panel(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        message_id: str | None = commands.Param(default=None, description="ID существующей плашки для перепривязки"),
+        force_new: bool = commands.Param(default=False, description="Создать новую плашку и перепривязать"),
+    ) -> None:
         if not _is_admin(inter.author):
             await inter.response.send_message(
                 embed=create_status_embed("⛔ Панель онбординга могут создавать только администраторы.", "error"),
@@ -85,10 +93,29 @@ class OnboardingCog(commands.Cog):
             await inter.response.send_message(embed=create_status_embed("❌ Канал правил недоступен.", "error"), ephemeral=True)
             return
 
-        message = await channel.send(embed=create_onboarding_embed(), view=RulesApprovalView(self))
-        await inter.response.send_message(
-            embed=create_status_embed(f"✅ Панель опубликована: {message.jump_url}", "success"),
-            ephemeral=True,
+        await inter.response.defer(ephemeral=True)
+        if message_id and force_new:
+            await inter.edit_original_message(embed=create_status_embed("❌ Укажите либо message_id, либо force_new, но не оба сразу.", "error"))
+            return
+
+        if force_new:
+            message = await self._create_panel_message(channel)
+        elif message_id:
+            try:
+                message = await self._bind_panel_message(channel, int(message_id.strip()))
+            except ValueError:
+                await inter.edit_original_message(embed=create_status_embed("❌ ID сообщения должен быть числом.", "error"))
+                return
+            except disnake.NotFound:
+                await inter.edit_original_message(embed=create_status_embed("❌ Сообщение с таким ID не найдено в канале правил.", "error"))
+                return
+            except disnake.Forbidden:
+                await inter.edit_original_message(embed=create_status_embed("❌ У бота нет прав прочитать это сообщение.", "error"))
+                return
+        else:
+            message = await self._get_or_create_panel_message(channel)
+        await inter.edit_original_message(
+            embed=create_status_embed(f"✅ Панель онбординга готова: {message.jump_url}", "success"),
         )
 
     @commands.slash_command(name="roles", description="Админское управление ролями")
@@ -262,6 +289,51 @@ class OnboardingCog(commands.Cog):
             return None
         channel = guild.get_channel(config.WELCOME_CHANNEL_ID)
         return channel if isinstance(channel, disnake.TextChannel) else None
+
+    async def _get_or_create_panel_message(self, channel: disnake.TextChannel | disnake.Thread) -> disnake.Message:
+        async with async_session() as session:
+            result = await session.execute(select(DashboardMessage).where(DashboardMessage.key == ONBOARDING_PANEL_KEY))
+            panel = result.scalars().first()
+
+            if panel:
+                existing_channel = self.bot.get_channel(panel.channel_id)
+                if existing_channel and hasattr(existing_channel, "fetch_message"):
+                    try:
+                        return await existing_channel.fetch_message(panel.message_id)
+                    except disnake.NotFound:
+                        logger.info("Onboarding panel message not found, creating a new one")
+                    except disnake.Forbidden:
+                        logger.warning("No permissions to reuse existing onboarding panel, creating a new one")
+
+        return await self._create_panel_message(channel)
+
+    async def _create_panel_message(self, channel: disnake.TextChannel | disnake.Thread) -> disnake.Message:
+        message = await channel.send(embed=create_onboarding_embed(), view=RulesApprovalView(self))
+        await self._save_panel_message(channel.id, message.id)
+        return message
+
+    async def _bind_panel_message(self, channel: disnake.TextChannel | disnake.Thread, message_id: int) -> disnake.Message:
+        message = await channel.fetch_message(message_id)
+        await self._save_panel_message(channel.id, message.id)
+        return message
+
+    async def _save_panel_message(self, channel_id: int, message_id: int) -> None:
+        async with async_session() as session:
+            result = await session.execute(select(DashboardMessage).where(DashboardMessage.key == ONBOARDING_PANEL_KEY))
+            panel = result.scalars().first()
+            if panel:
+                panel.channel_id = channel_id
+                panel.message_id = message_id
+                panel.updated_at = datetime.now(timezone.utc)
+            else:
+                session.add(
+                    DashboardMessage(
+                        key=ONBOARDING_PANEL_KEY,
+                        channel_id=channel_id,
+                        message_id=message_id,
+                    )
+                )
+            await session.commit()
 
     async def _audit_role(self, target_user_id: int, role_id: int, actor_id: int, action: str) -> None:
         async with async_session() as session:

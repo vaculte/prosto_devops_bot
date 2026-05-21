@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from typing import Any
 
 import disnake
@@ -10,13 +11,58 @@ from utils.embeds import create_status_embed
 logger = logging.getLogger("prosto_devops_bot")
 
 
+def parse_duration_input(value: str) -> int:
+    """Parse user duration input and return seconds."""
+    value = value.strip().lower().replace(" ", "")
+    for source, target in (
+        ("минуты", "m"),
+        ("минута", "m"),
+        ("минут", "m"),
+        ("мин", "m"),
+        ("м", "m"),
+        ("секунды", "s"),
+        ("секунда", "s"),
+        ("секунд", "s"),
+        ("сек", "s"),
+        ("с", "s"),
+    ):
+        value = value.replace(source, target)
+    if not value:
+        raise ValueError("empty duration")
+
+    if value.isdigit():
+        return int(value) * 60
+
+    if ":" in value:
+        parts = value.split(":")
+        if len(parts) != 2 or not all(part.isdigit() for part in parts):
+            raise ValueError("invalid mm:ss duration")
+        minutes, seconds = int(parts[0]), int(parts[1])
+        if seconds >= 60:
+            raise ValueError("seconds must be below 60")
+        total = minutes * 60 + seconds
+        if total <= 0:
+            raise ValueError("duration must be positive")
+        return total
+
+    match = re.fullmatch(r"(?:(\d+)m)?(?:(\d+)s)?", value)
+    if not match:
+        raise ValueError("invalid duration")
+    minutes = int(match.group(1) or 0)
+    seconds = int(match.group(2) or 0)
+    total = minutes * 60 + seconds
+    if total <= 0:
+        raise ValueError("duration must be positive")
+    return total
+
+
 class PomodoroPresetView(disnake.ui.View):
     """View for selecting a Pomodoro preset before starting the timer."""
 
     PRESETS = [
-        ("25/5", 25, 5),
-        ("45/15", 45, 15),
-        ("52/17", 52, 17),
+        ("25/5", 25 * 60, 5 * 60),
+        ("45/15", 45 * 60, 15 * 60),
+        ("52/17", 52 * 60, 17 * 60),
     ]
 
     def __init__(self, cog: Any, author_id: int, message: disnake.Message | None = None) -> None:
@@ -26,12 +72,12 @@ class PomodoroPresetView(disnake.ui.View):
         self.message = message
 
         # Add preset buttons dynamically
-        for label, focus_min, chill_min in self.PRESETS:
+        for label, focus_sec, chill_sec in self.PRESETS:
             button = disnake.ui.Button(
                 label=label,
                 style=disnake.ButtonStyle.green,
             )
-            button.callback = self._make_preset_callback(focus_min, chill_min)
+            button.callback = self._make_preset_callback(focus_sec, chill_sec)
             self.add_item(button)
 
         # Add custom button
@@ -50,7 +96,7 @@ class PomodoroPresetView(disnake.ui.View):
         delete_button.callback = self._delete_callback
         self.add_item(delete_button)
 
-    def _make_preset_callback(self, focus_min: int, chill_min: int):
+    def _make_preset_callback(self, focus_sec: int, chill_sec: int):
         async def callback(inter: disnake.MessageInteraction) -> None:
             if inter.author.id != self.author_id:
                 embed = create_status_embed(
@@ -59,7 +105,7 @@ class PomodoroPresetView(disnake.ui.View):
                 await inter.response.send_message(embed=embed, ephemeral=True)
                 return
             self.stop()
-            await self.cog.start_session(inter, focus_min, chill_min, edit_original=True)
+            await self.cog.start_session(inter, focus_sec, chill_sec, edit_original=True)
         return callback
 
     async def _custom_callback(self, inter: disnake.MessageInteraction) -> None:
@@ -111,19 +157,19 @@ class PomodoroCustomModal(disnake.ui.Modal):
         self.author_id = author_id
         components = [
             disnake.ui.TextInput(
-                label="Минут фокуса",
+                label="Фокус",
                 custom_id="focus_min",
-                placeholder="25",
+                placeholder="25, 25:30, 90s, 1m30s или 1м30с",
                 min_length=1,
-                max_length=3,
+                max_length=12,
                 required=True,
             ),
             disnake.ui.TextInput(
-                label="Минут отдыха",
+                label="Отдых",
                 custom_id="chill_min",
-                placeholder="5",
+                placeholder="5, 5:30, 90s, 1m30s или 1м30с",
                 min_length=1,
-                max_length=3,
+                max_length=12,
                 required=True,
             ),
         ]
@@ -134,28 +180,31 @@ class PomodoroCustomModal(disnake.ui.Modal):
         chill_str = inter.text_values.get("chill_min", "").strip()
 
         try:
-            focus_min = int(focus_str)
-            chill_min = int(chill_str)
+            focus_sec = parse_duration_input(focus_str)
+            chill_sec = parse_duration_input(chill_str)
         except ValueError:
-            embed = create_status_embed("❌ Введите целые числа для времени фокуса и отдыха.", "error")
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        if focus_min < 1 or chill_min < 1:
             embed = create_status_embed(
-                "❌ Время фокуса и отдыха должно быть не менее 1 минуты.", "error"
+                "❌ Введите время в формате `25`, `25:30`, `90s`, `1m30s` или `1м30с`.",
+                "error",
             )
             await inter.response.send_message(embed=embed, ephemeral=True)
             return
 
-        if focus_min > 180 or chill_min > 60:
+        if focus_sec < 1 or chill_sec < 1:
+            embed = create_status_embed(
+                "❌ Время фокуса и отдыха должно быть не менее 1 секунды.", "error"
+            )
+            await inter.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        if focus_sec > 180 * 60 or chill_sec > 60 * 60:
             embed = create_status_embed(
                 "❌ Максимум: фокус — 180 мин, отдых — 60 мин.", "error"
             )
             await inter.response.send_message(embed=embed, ephemeral=True)
             return
 
-        await self.cog.start_session(inter, focus_min, chill_min, edit_original=True)
+        await self.cog.start_session(inter, focus_sec, chill_sec, edit_original=True)
 
     async def on_error(self, error: Exception, inter: disnake.ModalInteraction) -> None:
         logger.error(f"PomodoroCustomModal error: {error}")
@@ -214,6 +263,12 @@ class PomodoroView(disnake.ui.View):
         else:
             await inter.edit_original_message(content="\u200b")
 
+    @disnake.ui.button(label="+ Присоединиться", style=disnake.ButtonStyle.blurple, custom_id="pomodoro_join")
+    async def join_button(self, button: disnake.ui.Button, inter: disnake.MessageInteraction) -> None:
+        await inter.response.defer(with_message=True, ephemeral=True)
+        result, status = await self.cog.join_session(self.session_id, inter)
+        await inter.edit_original_message(embed=create_status_embed(result, status))
+
     @disnake.ui.button(label="✕", style=disnake.ButtonStyle.red, custom_id="pomodoro_delete")
     async def delete_button(self, button: disnake.ui.Button, inter: disnake.MessageInteraction) -> None:
         if not self._is_owner(inter):
@@ -233,24 +288,28 @@ class PomodoroView(disnake.ui.View):
             self.toggle_button.style = disnake.ButtonStyle.gray
             self.toggle_button.disabled = False
             self.stop_button.disabled = False
+            self.join_button.disabled = False
             self.delete_button.disabled = True
         elif status == "paused":
             self.toggle_button.label = "▶️ Продолжить"
             self.toggle_button.style = disnake.ButtonStyle.green
             self.toggle_button.disabled = False
             self.stop_button.disabled = False
+            self.join_button.disabled = False
             self.delete_button.disabled = True
         elif status == "stopped":
             self.toggle_button.label = "▶️ Старт"
             self.toggle_button.style = disnake.ButtonStyle.gray
             self.toggle_button.disabled = True
             self.stop_button.disabled = True
+            self.join_button.disabled = True
             self.delete_button.disabled = False
         else:  # ready
             self.toggle_button.label = "▶️ Старт"
             self.toggle_button.style = disnake.ButtonStyle.green
             self.toggle_button.disabled = False
             self.stop_button.disabled = False
+            self.join_button.disabled = False
             self.delete_button.disabled = False
 
     def set_task(self, task: asyncio.Task | None) -> None:

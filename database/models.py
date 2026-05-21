@@ -23,6 +23,21 @@ class PomodoroSession(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
+    participants: Mapped[list["PomodoroParticipant"]] = relationship(back_populates="session", cascade="all, delete-orphan")
+
+
+class PomodoroParticipant(Base):
+    __tablename__ = "pomodoro_participants"
+    __table_args__ = (UniqueConstraint("session_id", "user_id", name="uq_pomodoro_participant_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("pomodoro_sessions.id", ondelete="CASCADE"), index=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    focus_minutes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    session: Mapped[PomodoroSession] = relationship(back_populates="participants")
+
 
 class VoiceActivity(Base):
     __tablename__ = "voice_activity"

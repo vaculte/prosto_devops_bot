@@ -22,14 +22,30 @@ def _discord_timestamp(dt: datetime) -> int:
 
 def format_duration(seconds: int | None) -> str:
     if not seconds or seconds <= 0:
-        return "0м"
+        return "0с"
 
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
-    if hours and minutes:
-        return f"{hours}ч {minutes}м"
+    secs = seconds % 60
+
     if hours:
-        return f"{hours}ч"
+        parts = [f"{hours}ч"]
+        if minutes:
+            parts.append(f"{minutes}м")
+        if secs:
+            parts.append(f"{secs}с")
+        return " ".join(parts)
+    if minutes:
+        return f"{minutes}м {secs}с" if secs else f"{minutes}м"
+    return f"{secs}с"
+
+
+def format_duration_minutes_only(seconds: int | None) -> str:
+    if not seconds or seconds <= 0:
+        return "0м"
+    minutes = seconds // 60
+    if seconds % 60:
+        minutes += 1
     return f"{minutes}м"
 
 
@@ -91,6 +107,7 @@ def create_pomodoro_embed(
     seconds_left: int | None = None,
     duration_sec: int | None = None,
     avatar_url: str | None = None,
+    participant_ids: list[int] | set[int] | None = None,
 ) -> disnake.Embed:
     phase_labels = {
         "focus": "🍅 Фокус",
@@ -100,6 +117,9 @@ def create_pomodoro_embed(
         "stopped": "🛑 Остановлено",
     }
     color = config.EMBED_COLORS.get(phase, config.EMBED_COLORS["primary"])
+
+    if phase in ("focus", "chill") and end_timestamp is None and seconds_left is not None:
+        end_timestamp = int(datetime.now(timezone.utc).timestamp()) + max(seconds_left, 0)
 
     embed = disnake.Embed(
         title=phase_labels.get(phase, phase),
@@ -119,26 +139,41 @@ def create_pomodoro_embed(
             embed.add_field(name="⏱️ Прошло", value=f"```{format_duration(duration_sec)}```", inline=False)
         embed.add_field(name="Циклов", value=f"```{total_cycles}```", inline=True)
         if focus_min is not None and chill_min is not None:
-            embed.add_field(name="Фокус", value=f"```{focus_min} мин```", inline=True)
-            embed.add_field(name="Отдых", value=f"```{chill_min} мин```", inline=True)
+            embed.add_field(name="Фокус", value=f"```{format_duration(focus_min)}```", inline=True)
+            embed.add_field(name="Отдых", value=f"```{format_duration(chill_min)}```", inline=True)
         embed.set_footer(text="⌛ Сообщение будет удалено через 2 минуты")
 
     elif phase == "focus":
-        embed.add_field(name="Окончание фокуса", value=f"<t:{end_timestamp}:R>", inline=False)
-        embed.add_field(name="", value=f"**Циклов:** `{total_cycles}`", inline=True)
+        if end_timestamp is not None:
+            embed.add_field(name="Осталось", value=f"<t:{end_timestamp}:R>", inline=True)
+        elif seconds_left is not None:
+            embed.add_field(name="Осталось", value=f"```{format_duration_minutes_only(seconds_left)}```", inline=True)
+        embed.set_footer(text=f"Циклов: {total_cycles}")
 
     elif phase == "chill":
-        embed.add_field(name="Окончание отдыха", value=f"<t:{end_timestamp}:R>", inline=False)
-        embed.add_field(name="", value=f"**Циклов:** `{total_cycles}`", inline=True)
+        if end_timestamp is not None:
+            embed.add_field(name="Осталось", value=f"<t:{end_timestamp}:R>", inline=True)
+        elif seconds_left is not None:
+            embed.add_field(name="Осталось", value=f"```{format_duration_minutes_only(seconds_left)}```", inline=True)
+        embed.set_footer(text=f"Циклов: {total_cycles}")
 
     elif phase == "ready":
-        embed.add_field(name="Фокус", value=f"```{focus_min} мин```", inline=True)
-        embed.add_field(name="Отдых", value=f"```{chill_min} мин```", inline=True)
+        embed.add_field(name="Фокус", value=f"```{format_duration(focus_min)}```", inline=True)
+        embed.add_field(name="Отдых", value=f"```{format_duration(chill_min)}```", inline=True)
         embed.add_field(name="Циклов", value=f"```{total_cycles}```", inline=True)
         embed.set_footer(text="⌛ У вас есть 2 минуты для старта")
 
     if avatar_url:
         embed.set_thumbnail(url=avatar_url)
+    if participant_ids is not None:
+        participants = list(participant_ids)
+        if participants:
+            shown = ", ".join(f"<@{user_id}>" for user_id in participants[:10])
+            if len(participants) > 10:
+                shown += f"\nи еще {len(participants) - 10}"
+            embed.add_field(name="Участники фокуса", value=shown, inline=False)
+        else:
+            embed.add_field(name="Участники фокуса", value="Пока никто не присоединился.", inline=False)
     if owner_id:
         embed.add_field(name="", value=f"**Создал:** <@{owner_id}>", inline=False)
     return embed
@@ -180,8 +215,8 @@ def create_stats_embed(
     )
 
     focus_lines = []
-    for idx, (user_id, minutes) in enumerate(pomodoro_top or [], start=1):
-        focus_lines.append(f"**{idx}.** <@{user_id}> — `{minutes}м фокуса`")
+    for idx, (user_id, seconds) in enumerate(pomodoro_top or [], start=1):
+        focus_lines.append(f"**{idx}.** <@{user_id}> — `{format_duration(seconds)} фокуса`")
     embed.add_field(
         name="Pomodoro фокус",
         value="\n".join(focus_lines) if focus_lines else "Пока нет данных.",

@@ -53,6 +53,9 @@ POMODORO_CHANNEL_ID = _int_env("POMODORO_CHANNEL_ID")
 EVENTS_CHANNEL_ID = _int_env("EVENTS_CHANNEL_ID")
 RULES_CHANNEL_ID = _int_env("RULES_CHANNEL_ID")
 WELCOME_CHANNEL_ID = _int_env("WELCOME_CHANNEL_ID")
+LEARNING_CATEGORY_IDS = _int_list_env("LEARNING_CATEGORY_IDS")
+LEARNING_VOICE_CHANNEL_IDS = _int_list_env("LEARNING_VOICE_CHANNEL_IDS")
+LEARNING_TEXT_CHANNEL_IDS = _int_list_env("LEARNING_TEXT_CHANNEL_IDS")
 
 VERIFIED_ROLE_ID = _int_env("VERIFIED_ROLE_ID")
 VERIFIED_ROLE_NAME = os.getenv("VERIFIED_ROLE_NAME", "Verified").strip() or "Verified"
@@ -60,16 +63,16 @@ VERIFIED_ROLE_NAME = os.getenv("VERIFIED_ROLE_NAME", "Verified").strip() or "Ver
 ASSIGNABLE_ROLE_IDS = _int_list_env("ASSIGNABLE_ROLE_IDS")
 
 EMBED_COLORS = {
-    "primary": 0x2F80ED,
-    "success": 0x27AE60,
-    "danger": 0xEB5757,
-    "warning": 0xF2C94C,
-    "muted": 0x828282,
-    "focus": 0xEB5757,
-    "chill": 0x27AE60,
-    "ready": 0x2F80ED,
-    "paused": 0xF2C94C,
-    "stopped": 0x828282,
+    "primary": 0x393A41,
+    "success": 0x393A41,
+    "danger": 0x393A41,
+    "warning": 0x393A41,
+    "muted": 0x393A41,
+    "focus": 0x393A41,
+    "chill": 0x393A41,
+    "ready": 0x393A41,
+    "paused": 0x393A41,
+    "stopped": 0x393A41,
 }
 
 EVENT_TYPES = {
