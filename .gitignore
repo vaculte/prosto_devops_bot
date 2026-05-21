@@ -1,7 +1,5 @@
 .env
 
-config.py
-
 versions/
 venv/
 database/
